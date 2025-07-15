@@ -1,0 +1,119 @@
+# STEP 1: Upload file
+from google.colab import files
+uploaded = files.upload()  # This will prompt you to upload the JSON file manually
+
+# STEP 2: Load the uploaded JSON file
+import json
+
+filename = list(uploaded.keys())[0]  # Get uploaded filename
+with open(filename, 'r') as f:
+    data = json.load(f)
+
+print(f"Total transactions: {len(data)}")
+print("Sample record:", data[0])
+import pandas as pd
+from collections import defaultdict
+import numpy as np
+
+wallet_features = defaultdict(lambda: {
+    'total_tx': 0,
+    'deposit': 0,
+    'borrow': 0,
+    'repay': 0,
+    'redeem': 0,
+    'liquidation': 0,
+    'total_amount': 0,
+    'tx_timestamps': []
+})
+
+for tx in data:
+    wallet = tx['userWallet']
+    action = tx['action'].lower()
+    timestamp = tx['timestamp']
+    try:
+        amount = float(tx['actionData'].get('amount', 0))
+    except:
+        amount = 0
+
+    wallet_features[wallet]['total_tx'] += 1
+    wallet_features[wallet]['total_amount'] += amount
+    wallet_features[wallet]['tx_timestamps'].append(timestamp)
+
+    if action == 'deposit':
+        wallet_features[wallet]['deposit'] += 1
+    elif action == 'borrow':
+        wallet_features[wallet]['borrow'] += 1
+    elif action == 'repay':
+        wallet_features[wallet]['repay'] += 1
+    elif action == 'redeemunderlying':
+        wallet_features[wallet]['redeem'] += 1
+    elif action == 'liquidationcall':
+        wallet_features[wallet]['liquidation'] += 1
+
+# Convert to DataFrame
+rows = []
+for wallet, feats in wallet_features.items():
+    timestamps = sorted(feats['tx_timestamps'])
+    avg_time_gap = np.mean(np.diff(timestamps)) if len(timestamps) > 1 else 0
+    repay_borrow_ratio = feats['repay'] / feats['borrow'] if feats['borrow'] > 0 else 0
+    liquidation_ratio = feats['liquidation'] / feats['total_tx'] if feats['total_tx'] > 0 else 0
+
+    rows.append({
+        'wallet': wallet,
+        'total_tx': feats['total_tx'],
+        'deposit': feats['deposit'],
+        'borrow': feats['borrow'],
+        'repay': feats['repay'],
+        'redeem': feats['redeem'],
+        'liquidation': feats['liquidation'],
+        'total_amount': feats['total_amount'],
+        'avg_time_gap': avg_time_gap,
+        'repay_borrow_ratio': repay_borrow_ratio,
+        'liquidation_ratio': liquidation_ratio
+    })
+
+df = pd.DataFrame(rows)
+df.head()
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.cluster import KMeans
+import matplotlib.pyplot as plt
+
+# Features to use for scoring
+features = ['total_tx', 'deposit', 'borrow', 'repay', 'redeem', 'liquidation',
+            'total_amount', 'avg_time_gap', 'repay_borrow_ratio', 'liquidation_ratio']
+
+# Normalize features
+scaler = MinMaxScaler()
+X_scaled = scaler.fit_transform(df[features])
+
+# Cluster wallets (e.g., 5 clusters from risky to reliable)
+kmeans = KMeans(n_clusters=5, random_state=42)
+df['cluster'] = kmeans.fit_predict(X_scaled)
+
+# Define a scoring logic based on cluster risk
+# You can customize this mapping based on cluster behavior analysis
+cluster_scores = {
+    0: 200,  # risky cluster
+    1: 400,
+    2: 600,
+    3: 800,
+    4: 1000  # best behavior
+}
+
+# Assign score by cluster
+df['credit_score'] = df['cluster'].map(cluster_scores)
+
+# Normalize within cluster based on reward metrics (optional fine-tuning)
+# For now, we keep it simple
+
+# Save to CSV
+df[['wallet', 'credit_score']].to_csv('wallet_scores.csv', index=False)
+
+# Show score distribution
+plt.figure(figsize=(8, 4))
+df['credit_score'].hist(bins=10)
+plt.title("Credit Score Distribution")
+plt.xlabel("Credit Score")
+plt.ylabel("Number of Wallets")
+plt.grid(True)
+plt.show()
